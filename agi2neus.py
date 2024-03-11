@@ -58,9 +58,9 @@ def sharpness(imagePath):
 def parse_args():
 	parser = argparse.ArgumentParser(description="convert Agisoft XML export to nerf format transforms.json")
 
-	parser.add_argument("--xml_in", default=r"path/to/xxx.xml", help="specify xml file location")
-	parser.add_argument("--out", default=r"path/", help="output path")
-	parser.add_argument("--imgfolder", default=r"path/to/img/", help="location of folder with images")
+	parser.add_argument("--xml_in", default=r"E:/itest/citymd.xml", help="specify xml file location")
+	parser.add_argument("--out", default=r"E:/itest/", help="output path")
+	parser.add_argument("--imgfolder", default=r"E:/data/citymodel_data/img_png/", help="location of folder with images")
 	parser.add_argument("--imgtype", default="png", help="type of images (ex. jpg, png, ...)")
 	args = parser.parse_args()
 	return args
@@ -205,7 +205,9 @@ if __name__ == "__main__":
 	perm=np.argsort(names)
  
 	poses = np.moveaxis(poses, -1, 0)
+	poses[...,:4]=poses[:,[0,2,1],:4]
 	poses = poses[perm]
+	
 
 	np.save(os.path.join(OUTPATH, 'poses.npy'), poses)
     
