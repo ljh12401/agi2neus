@@ -1,64 +1,14 @@
 import os
 import argparse
 import xml.etree.ElementTree as ET
-import math
-import cv2
 import numpy as np
-
-import json
-
-###############################################################################
-# START
-def closest_point_2_lines(oa, da, ob, db): # returns point closest to both rays of form o+t*d, and a weight factor that goes to 0 if the lines are parallel
-	da = da / np.linalg.norm(da)
-	db = db / np.linalg.norm(db)
-	c = np.cross(da, db)
-	denom = np.linalg.norm(c)**2
-	t = ob - oa
-	ta = np.linalg.det([t, db, c]) / (denom + 1e-10)
-	tb = np.linalg.det([t, da, c]) / (denom + 1e-10)
-	if ta > 0:
-		ta = 0
-	if tb > 0:
-		tb = 0
-	return (oa+ta*da+ob+tb*db) * 0.5, denom
-
-def central_point(out):
-	# find a central point they are all looking at
-	print("computing center of attention...")
-	totw = 0.0
-	totp = np.array([0.0, 0.0, 0.0])
-	for f in out["frames"]:
-		mf = np.array(f["transform_matrix"])[0:3,:]
-		for g in out["frames"]:
-			mg = g["transform_matrix"][0:3,:]
-			p, w = closest_point_2_lines(mf[:,3], mf[:,2], mg[:,3], mg[:,2])
-			if w > 0.0001:
-				totp += p*w
-				totw += w
-	totp /= totw
-	print(totp) # the cameras are looking at totp
-	for f in out["frames"]:
-		f["transform_matrix"][0:3,3] -= totp
-		f["transform_matrix"] = f["transform_matrix"].tolist()
-	return out
-
-def sharpness(imagePath):
-	image = cv2.imread(imagePath)
-	if image is None:
-		print("Image not found:", imagePath)
-		return 0
-	gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-	fm = cv2.Laplacian(gray, cv2.CV_64F).var()
-	return fm
-
-#END
-###############################################################################
+import trimesh
+from glob import glob
 
 def parse_args():
-	parser = argparse.ArgumentParser(description="convert Agisoft XML export to nerf format transforms.json")
+	parser = argparse.ArgumentParser(description="convert Agisoft XML to NeuS format poses.npy and cameras_sphere.npz")
 
-	parser.add_argument("--xml_in", default=r"E:/itest/citymd.xml", help="specify xml file location")
+	parser.add_argument("--file_in", default=r"E:/itest", help="specify xml, ply file location")
 	parser.add_argument("--out", default=r"E:/itest/", help="output path")
 	parser.add_argument("--imgfolder", default=r"E:/data/citymodel_data/img_png/", help="location of folder with images")
 	parser.add_argument("--imgtype", default="png", help="type of images (ex. jpg, png, ...)")
@@ -75,63 +25,20 @@ def get_calibration(root):
 	return None
 
 
-def reflectZ():
-	return [[1, 0, 0, 0],
-			[0, 1, 0, 0],
-			[0, 0, -1, 0],
-			[0, 0, 0, 1]]
-
-def reflectY():
-	return [[1, 0, 0, 0],
-			[0, -1, 0, 0],
-			[0, 0, 1, 0],
-			[0, 0, 0, 1]]
-
-def matrixMultiply(mat1, mat2):
-	return np.array([[sum(a*b for a,b in zip(row, col)) for col in zip(*mat2)] for row in mat1])
-
-
 if __name__ == "__main__":
 	args = parse_args()
-	XML_LOCATION = args.xml_in
+	IN_LOCATION = args.file_in
 	IMGTYPE = args.imgtype
 	IMGFOLDER = args.imgfolder
 	OUTPATH = args.out
 
-	out = dict()
-
-	with open(XML_LOCATION, "r") as f:
+	with open(os.path.join(IN_LOCATION+'/'+'citymd.xml'), "r") as f:
 		root = ET.parse(f).getroot()
 
 		w = float(root[0][0][0][0].get("width"))
 		h = float(root[0][0][0][0].get("height"))
-
 		calibration = get_calibration(root)
-		fl_x = float(calibration[1].text)
-		fl_y = fl_x
-		k1 = float(calibration[4].text)
-		k2 = float(calibration[5].text)
-		p1 = float(calibration[7].text)
-		p2 = float(calibration[8].text)
-		cx = float(calibration[2].text) + w/2
-		cy = float(calibration[3].text) + h/2
-		camera_angle_x = math.atan(float(w) / (float(fl_x) * 2)) * 2
-		camera_angle_y = math.atan(float(h) / (float(fl_y) * 2)) * 2
-		aabb_scale = 16
-
-		out.update({"camera_angle_x": camera_angle_x})
-		out.update({"camera_angle_y": camera_angle_y})
-		out.update({"fl_x": fl_x})
-		out.update({"fl_y": fl_y})
-		out.update({"k1": k1})
-		out.update({"k2": k2})
-		out.update({"p1": p1})
-		out.update({"p2": p2})
-		out.update({"cx": cx})
-		out.update({"cy": cy})
-		out.update({"w": w})
-		out.update({"h": h})
-		out.update({"aabb_scale": aabb_scale})
+		f = float(calibration[1].text)
 
 		components_matrix = np.ones([4, 4])
 		components = root[0][1][0][0]
@@ -153,14 +60,9 @@ if __name__ == "__main__":
 		components_matrix[3][0] = 0
 		components_matrix[3][1] = 0
 		components_matrix[3][2] = 0
-
-		frames = list()
   
-		names=[]
-		perm=[]
 		poses=[]
 		c2w_mats=[]
-		hwf=np.array([h,w,fl_x]).reshape([3,1])
   
 		for frame in root[0][2]:
 			current_frame = dict()
@@ -169,47 +71,45 @@ if __name__ == "__main__":
 			if(frame[0].tag != "transform"):
 				continue
 
-			imagePath = IMGFOLDER+frame.get("label")+"." + IMGTYPE
-			names.append(imagePath)
-			current_frame.update({"file_path": imagePath})
-			current_frame.update({"sharpness":sharpness(imagePath)})
 			matrix_elements = [float(i) for i in frame[0].text.split()]
 			transform_matrix = np.array([[matrix_elements[0], matrix_elements[1], matrix_elements[2], matrix_elements[3]*float(components[2].text)], [matrix_elements[4], matrix_elements[5], matrix_elements[6], matrix_elements[7]*float(components[2].text)], [matrix_elements[8], matrix_elements[9], matrix_elements[10], matrix_elements[11]*float(components[2].text)], [matrix_elements[12], matrix_elements[13], matrix_elements[14], matrix_elements[15]]])
 			transform_matrix =np.matmul(components_matrix,transform_matrix)
-			#swap axes
-			transform_matrix = transform_matrix[[2,0,1,3],:]
-			#reflect z and Y axes
 
-			transform_matrix=matrixMultiply(matrixMultiply(transform_matrix, reflectZ()), reflectY())
-			current_frame.update({"transform_matrix":transform_matrix} )
-
-			frames.append(current_frame)
-		out.update({"frames": frames})
+			c2w_mats.append(transform_matrix)
   
-	out = central_point(out)
-	for i in range(len(out["frames"])):
-		transform_matrix=out["frames"][i]["transform_matrix"]
-		transform_matrix=np.array(transform_matrix)
-		transform_matrix[2,:]*=-1  
-		transform_matrix=transform_matrix[[1,0,2,3],:]
-		transform_matrix[0:3,1]*=-1
-		transform_matrix[0:3,2]*=-1
-		c2w_mat=transform_matrix
-		c2w_mats.append(c2w_mat)
-  
-	c2w_mats=np.stack(c2w_mats,0)
-	poses = c2w_mats[:, :3, :4].transpose([1,2,0])
-	poses = np.concatenate([poses, np.tile(hwf[..., np.newaxis], [1,1,poses.shape[-1]])], 1)
-	poses = np.concatenate([poses[:, 1:2, :], poses[:, 0:1, :], -poses[:, 2:3, :], poses[:, 3:4, :], poses[:, 4:5, :]], 1)
-	out.update({"frames": frames})
-	perm=np.argsort(names)
- 
-	poses = np.moveaxis(poses, -1, 0)
-	poses[...,:4]=poses[:,[0,2,1],:4]
-	poses = poses[perm]
-	
+	poses=np.stack(c2w_mats,0)
 
 	np.save(os.path.join(OUTPATH, 'poses.npy'), poses)
-    
-	with open(os.path.join(OUTPATH,"transforms.json"), "w") as f:
-		json.dump(out, f, indent=4)
+	cam_dict = dict()
+	
+	for i in range(poses.shape[0]):
+		pose = np.diag([1.0, 1.0, 1.0, 1.0]).astype(np.float32)
+		pose=poses[i]
+		intrinsic = np.diag([f, f, 1.0, 1.0]).astype(np.float32)
+		intrinsic[0, 2] = (w - 1) * 0.5
+		intrinsic[1, 2] = (h - 1) * 0.5
+		w2c = np.linalg.inv(pose)
+		world_mat = intrinsic @ w2c
+		world_mat = world_mat.astype(np.float32)
+		cam_dict['camera_mat_{}'.format(i)] = intrinsic
+		cam_dict['camera_mat_inv_{}'.format(i)] = np.linalg.inv(intrinsic)
+		cam_dict['world_mat_{}'.format(i)] = world_mat
+		cam_dict['world_mat_inv_{}'.format(i)] = np.linalg.inv(world_mat)
+
+ 
+	pcd = trimesh.load(os.path.join(IN_LOCATION, 'sparse_points_interest.ply'))
+	vertices = pcd.vertices
+	bbox_max = np.max(vertices, axis=0)
+	bbox_min = np.min(vertices, axis=0)
+	center = (bbox_max + bbox_min) * 0.5
+	radius = np.linalg.norm(vertices - center, ord=2, axis=-1).max()
+	scale_mat = np.diag([radius, radius, radius, 1.0]).astype(np.float32)
+	scale_mat[:3, 3] = center
+ 
+	for i in range(poses.shape[0]):
+		cam_dict['scale_mat_{}'.format(i)] = scale_mat
+		cam_dict['scale_mat_inv_{}'.format(i)] = np.linalg.inv(scale_mat)
+  
+	np.savez(os.path.join(OUTPATH, 'cameras_sphere.npz'), **cam_dict)
+ 
+	print('Process done!')
