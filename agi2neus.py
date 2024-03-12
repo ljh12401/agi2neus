@@ -8,9 +8,9 @@ from glob import glob
 def parse_args():
 	parser = argparse.ArgumentParser(description="convert Agisoft XML to NeuS format poses.npy and cameras_sphere.npz")
 
-	parser.add_argument("--file_in", default=r"E:/itest", help="specify xml, ply file location")
-	parser.add_argument("--out", default=r"E:/itest/", help="output path")
-	parser.add_argument("--imgfolder", default=r"E:/data/citymodel_data/img_png/", help="location of folder with images")
+	parser.add_argument("--file_in", default=r"path/to/file_in", help="specify xml, ply file location")
+	parser.add_argument("--out", default=r"path/to/file_out", help="output path")
+	parser.add_argument("--imgfolder", default=r"path/to/image", help="location of folder with images")
 	parser.add_argument("--imgtype", default="png", help="type of images (ex. jpg, png, ...)")
 	args = parser.parse_args()
 	return args
@@ -32,7 +32,7 @@ if __name__ == "__main__":
 	IMGFOLDER = args.imgfolder
 	OUTPATH = args.out
 
-	with open(os.path.join(IN_LOCATION+'/'+'citymd.xml'), "r") as f:
+	with open(os.path.join(IN_LOCATION+'/'+'xxx.xml'), "r") as f:
 		root = ET.parse(f).getroot()
 
 		w = float(root[0][0][0][0].get("width"))
